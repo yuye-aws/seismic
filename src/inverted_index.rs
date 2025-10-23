@@ -20,6 +20,117 @@ use std::time::Instant;
 
 use std::io::Result as IoResult;
 
+#[derive(Debug, Clone, Default)]
+pub struct QueryStatistics {
+    pub summary_dot_products: usize,
+    pub document_dot_products: usize,
+    pub clusters_examined: usize,
+    pub summary_computation_time_micros: u128,
+    pub document_computation_time_micros: u128,
+    pub sorting_time_micros: u128,
+    pub other_time_micros: u128,
+}
+
+impl QueryStatistics {
+    pub fn print_query_stats(&self, query_id: usize) {
+        println!(
+            "Query {}: {} summary dots ({} μs), {} document dots ({} μs), {} clusters examined, sorting: {} μs, other: {} μs",
+            query_id, 
+            self.summary_dot_products, 
+            self.summary_computation_time_micros,
+            self.document_dot_products, 
+            self.document_computation_time_micros,
+            self.clusters_examined,
+            self.sorting_time_micros,
+            self.other_time_micros
+        );
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AggregatedStatistics {
+    pub total_queries: usize,
+    pub total_summary_dot_products: usize,
+    pub total_document_dot_products: usize,
+    pub total_clusters_examined: usize,
+    pub total_summary_computation_time_micros: u128,
+    pub total_document_computation_time_micros: u128,
+    pub total_sorting_time_micros: u128,
+    pub total_other_time_micros: u128,
+}
+
+impl AggregatedStatistics {
+    pub fn add_query_stats(&mut self, stats: &QueryStatistics) {
+        self.total_queries += 1;
+        self.total_summary_dot_products += stats.summary_dot_products;
+        self.total_document_dot_products += stats.document_dot_products;
+        self.total_clusters_examined += stats.clusters_examined;
+        self.total_summary_computation_time_micros += stats.summary_computation_time_micros;
+        self.total_document_computation_time_micros += stats.document_computation_time_micros;
+        self.total_sorting_time_micros += stats.sorting_time_micros;
+        self.total_other_time_micros += stats.other_time_micros;
+    }
+
+    pub fn print_averaged_statistics(&self) {
+        if self.total_queries == 0 {
+            println!("No queries processed.");
+            return;
+        }
+
+        let avg_total_time = (self.total_summary_computation_time_micros + 
+                             self.total_document_computation_time_micros + 
+                             self.total_sorting_time_micros + 
+                             self.total_other_time_micros) as f64 / self.total_queries as f64;
+
+        println!("\n=== Averaged Query Statistics ===");
+        println!("Total queries processed: {}", self.total_queries);
+        println!(
+            "Average summary dot products per query: {:.2}",
+            self.total_summary_dot_products as f64 / self.total_queries as f64
+        );
+        println!(
+            "Average document dot products per query: {:.2}",
+            self.total_document_dot_products as f64 / self.total_queries as f64
+        );
+        println!(
+            "Average clusters examined per query: {:.2}",
+            self.total_clusters_examined as f64 / self.total_queries as f64
+        );
+        
+        println!("\n--- Timing Breakdown (per query) ---");
+        let avg_summary_time = self.total_summary_computation_time_micros as f64 / self.total_queries as f64;
+        let avg_document_time = self.total_document_computation_time_micros as f64 / self.total_queries as f64;
+        let avg_sorting_time = self.total_sorting_time_micros as f64 / self.total_queries as f64;
+        let avg_other_time = self.total_other_time_micros as f64 / self.total_queries as f64;
+        
+        println!(
+            "Summary computation:     {:.2} μs ({:.1}%)",
+            avg_summary_time,
+            avg_summary_time / avg_total_time * 100.0
+        );
+        println!(
+            "Document computation:    {:.2} μs ({:.1}%)",
+            avg_document_time,
+            avg_document_time / avg_total_time * 100.0
+        );
+        println!(
+            "Cluster sorting:         {:.2} μs ({:.1}%)",
+            avg_sorting_time,
+            avg_sorting_time / avg_total_time * 100.0
+        );
+        println!(
+            "Other operations:        {:.2} μs ({:.1}%)",
+            avg_other_time,
+            avg_other_time / avg_total_time * 100.0
+        );
+        println!(
+            "Total average time:      {:.2} μs",
+            avg_total_time
+        );
+        println!("=====================================\n");
+    }
+}
+
 #[derive(Default, PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub struct InvertedIndex<C, V>
 where
@@ -187,6 +298,66 @@ where
         n_knn: usize,
         first_sorted: bool,
     ) -> Vec<(f32, usize)> {
+        let (results, _stats) = self.search_with_stats(
+            query_components,
+            query_values,
+            k,
+            query_cut,
+            heap_factor,
+            n_knn,
+            first_sorted,
+        );
+        results
+    }
+
+    /// Process multiple queries and return aggregated statistics
+    #[allow(clippy::too_many_arguments)]
+    pub fn batch_search_with_aggregated_stats<'a, I>(
+        &self,
+        queries: I,
+        k: usize,
+        query_cut: usize,
+        heap_factor: f32,
+        n_knn: usize,
+        first_sorted: bool,
+    ) -> (Vec<Vec<(f32, usize)>>, AggregatedStatistics)
+    where
+        I: Iterator<Item = (&'a [C], &'a [f32])>,
+    {
+        let mut aggregated_stats = AggregatedStatistics::default();
+        let results: Vec<Vec<(f32, usize)>> = queries
+            .map(|(query_components, query_values)| {
+                let (result, query_stats) = self.search_with_stats(
+                    query_components,
+                    query_values,
+                    k,
+                    query_cut,
+                    heap_factor,
+                    n_knn,
+                    first_sorted,
+                );
+                aggregated_stats.add_query_stats(&query_stats);
+                result
+            })
+            .collect();
+
+        (results, aggregated_stats)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn search_with_stats(
+        &self,
+        query_components: &[C],
+        query_values: &[f32],
+        k: usize,
+        query_cut: usize,
+        heap_factor: f32,
+        n_knn: usize,
+        first_sorted: bool,
+    ) -> (Vec<(f32, usize)>, QueryStatistics) {
+        let query_start_time = std::time::Instant::now();
+        
         // Assert that query components are sorted in case of using a mergsort like strategy for the dot product
         assert!(
             query_components.windows(2).all(|w| w[0] <= w[1]),
@@ -197,6 +368,7 @@ where
 
         let mut heap = KHeap::new(k);
         let mut visited = HashSet::with_capacity(query_cut.min(query_components.len()) * 5000); // TODO: 5000 should be n_postings
+        let mut stats = QueryStatistics::default();
 
         // Evaluate the posting list only for the top score query terms
         let mut iter = query_components
@@ -204,7 +376,7 @@ where
             .zip(query_values)
             .k_largest_by(query_cut, |a, b| a.1.partial_cmp(b.1).unwrap());
         if first_sorted && let Some((&component_id, &_value)) = iter.next() {
-            self.posting_lists[component_id.as_()].sort_and_search(
+            let posting_stats = self.posting_lists[component_id.as_()].sort_and_search_with_stats(
                 dense_query.as_deref(),
                 query_components,
                 query_values,
@@ -214,9 +386,15 @@ where
                 &mut visited,
                 &self.forward_index,
             );
+            stats.summary_dot_products += posting_stats.summary_dot_products;
+            stats.document_dot_products += posting_stats.document_dot_products;
+            stats.clusters_examined += posting_stats.clusters_examined;
+            stats.summary_computation_time_micros += posting_stats.summary_computation_time_micros;
+            stats.document_computation_time_micros += posting_stats.document_computation_time_micros;
+            stats.sorting_time_micros += posting_stats.sorting_time_micros;
         }
         for (&component_id, &_value) in iter {
-            self.posting_lists[component_id.as_()].search(
+            let posting_stats = self.posting_lists[component_id.as_()].search_with_stats(
                 dense_query.as_deref(),
                 query_components,
                 query_values,
@@ -226,11 +404,19 @@ where
                 &mut visited,
                 &self.forward_index,
             );
+            stats.summary_dot_products += posting_stats.summary_dot_products;
+            stats.document_dot_products += posting_stats.document_dot_products;
+            stats.clusters_examined += posting_stats.clusters_examined;
+            stats.summary_computation_time_micros += posting_stats.summary_computation_time_micros;
+            stats.document_computation_time_micros += posting_stats.document_computation_time_micros;
+            stats.sorting_time_micros += posting_stats.sorting_time_micros;
         }
+        
+        let knn_start_time = std::time::Instant::now();
         if n_knn > 0
             && let Some(knn) = self.knn.as_ref()
         {
-            knn.refine(
+            let knn_docs = knn.refine(
                 dense_query.as_deref(),
                 query_components,
                 query_values,
@@ -239,14 +425,28 @@ where
                 &self.forward_index,
                 n_knn,
             );
+            stats.document_dot_products += knn_docs;
         }
+        let knn_time = knn_start_time.elapsed().as_micros();
 
-        heap.into_sorted_vec()
+        let results_start_time = std::time::Instant::now();
+        let results = heap.into_sorted_vec()
             .into_iter()
             .map(|ScoredItem { id: offset, score }| {
                 (score, self.forward_index.offset_to_id(offset))
             })
-            .collect()
+            .collect();
+        let results_time = results_start_time.elapsed().as_micros();
+
+        let total_query_time = query_start_time.elapsed().as_micros();
+        stats.other_time_micros = total_query_time
+            .saturating_sub(stats.summary_computation_time_micros)
+            .saturating_sub(stats.document_computation_time_micros)
+            .saturating_sub(stats.sorting_time_micros)
+            .saturating_sub(knn_time)
+            .saturating_sub(results_time);
+
+        (results, stats)
     }
 
     /// `n_postings`: minimum number of postings to select for each component
@@ -524,10 +724,47 @@ impl<C: ComponentType> PostingList<C> {
     ) where
         V: ValueType,
     {
-        let dots = self.summaries.distances(query_components, query_values);
+        let _stats = self.search_with_stats(
+            dense_query,
+            query_components,
+            query_values,
+            k,
+            heap_factor,
+            heap,
+            visited,
+            forward_index,
+        );
+    }
 
-        // let mut entered = 0;
-        // let mut evaluated_docs = 0;
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    pub fn search_with_stats<V>(
+        &self,
+        dense_query: Option<&[f32]>,
+        query_components: &[C],
+        query_values: &[f32],
+        k: usize,
+        heap_factor: f32,
+        heap: &mut KHeap<ScoredItem>,
+        visited: &mut HashSet<usize>,
+        forward_index: &SparseDataset<C, V>,
+    ) -> QueryStatistics
+    where
+        V: ValueType,
+    {
+        let summary_start_time = std::time::Instant::now();
+        let dots = self.summaries.distances(query_components, query_values);
+        let summary_time = summary_start_time.elapsed().as_micros();
+        
+        let mut stats = QueryStatistics::default();
+        
+        // Count summary dot products (one per cluster/summary)
+        stats.summary_dot_products = dots.len();
+        stats.summary_computation_time_micros = summary_time;
+
+        let mut clusters_examined = 0;
+        let mut documents_evaluated = 0;
+        let mut document_computation_time = 0u128;
 
         let mut iter = dots.into_iter().enumerate();
         let mut next_block =
@@ -537,14 +774,15 @@ impl<C: ComponentType> PostingList<C> {
             let packed_posting_block = &self.packed_postings
                 [self.block_offsets[block_id]..self.block_offsets[block_id + 1]];
 
-            // entered += 1;
-            // evaluated_docs += packed_posting_block.len();
+            clusters_examined += 1;
+            documents_evaluated += packed_posting_block.len();
 
             prefetch_read_slice(packed_posting_block);
 
             next_block =
                 iter.find(|&(_, dot)| !(heap.len() == k && dot < heap_factor * heap.peek().score));
 
+            let doc_eval_start_time = std::time::Instant::now();
             self.evaluate_posting_block(
                 dense_query,
                 query_components,
@@ -554,7 +792,13 @@ impl<C: ComponentType> PostingList<C> {
                 visited,
                 forward_index,
             );
+            document_computation_time += doc_eval_start_time.elapsed().as_micros();
         }
+
+        stats.clusters_examined = clusters_examined;
+        stats.document_dot_products = documents_evaluated;
+        stats.document_computation_time_micros = document_computation_time;
+        stats
     }
 
     // Sort summaries by dot product w.r.t. to the query. Useful only in the first list.
@@ -575,12 +819,56 @@ impl<C: ComponentType> PostingList<C> {
         C: ComponentType,
         V: ValueType,
     {
+        let _stats = self.sort_and_search_with_stats(
+            dense_query,
+            query_components,
+            query_values,
+            k,
+            heap_factor,
+            heap,
+            visited,
+            forward_index,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sort_and_search_with_stats<V>(
+        &self,
+        dense_query: Option<&[f32]>,
+        query_components: &[C],
+        query_values: &[f32],
+        k: usize,
+        heap_factor: f32,
+        heap: &mut KHeap<ScoredItem>,
+        visited: &mut HashSet<usize>,
+        forward_index: &SparseDataset<C, V>,
+    ) -> QueryStatistics
+    where
+        C: ComponentType,
+        V: ValueType,
+    {
+        let summary_start_time = std::time::Instant::now();
         let dots = self.summaries.distances(query_components, query_values);
+        let summary_time = summary_start_time.elapsed().as_micros();
+        
+        let mut stats = QueryStatistics::default();
+        
+        // Count summary dot products (one per cluster/summary)
+        stats.summary_dot_products = dots.len();
+        stats.summary_computation_time_micros = summary_time;
+        
+        let sorting_start_time = std::time::Instant::now();
         let dots: Vec<_> = dots
             .into_iter()
             .enumerate()
             .sorted_unstable_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap())
             .collect();
+        let sorting_time = sorting_start_time.elapsed().as_micros();
+        stats.sorting_time_micros = sorting_time;
+
+        let mut clusters_examined = 0;
+        let mut documents_evaluated = 0;
+        let mut document_computation_time = 0u128;
 
         let mut iter = dots.into_iter();
         let mut next_block =
@@ -590,11 +878,15 @@ impl<C: ComponentType> PostingList<C> {
             let packed_posting_block = &self.packed_postings
                 [self.block_offsets[block_id]..self.block_offsets[block_id + 1]];
 
+            clusters_examined += 1;
+            documents_evaluated += packed_posting_block.len();
+
             prefetch_read_slice(packed_posting_block);
 
             next_block =
                 iter.find(|&(_, dot)| !(heap.len() == k && dot < heap_factor * heap.peek().score));
 
+            let doc_eval_start_time = std::time::Instant::now();
             self.evaluate_posting_block(
                 dense_query,
                 query_components,
@@ -604,14 +896,13 @@ impl<C: ComponentType> PostingList<C> {
                 visited,
                 forward_index,
             );
+            document_computation_time += doc_eval_start_time.elapsed().as_micros();
         }
 
-        // println!(
-        //     "Number of summaries to evaluate: {}. Evaluated {} blocks, {} documents, ",
-        //     indexed_dots.len(),
-        //     entered,
-        //     evaluated_docs
-        // );
+        stats.clusters_examined = clusters_examined;
+        stats.document_dot_products = documents_evaluated;
+        stats.document_computation_time_micros = document_computation_time;
+        stats
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1113,13 +1404,15 @@ impl Knn {
         visited: &mut HashSet<usize>,
         forward_index: &SparseDataset<C, V>,
         in_n_knn: usize,
-    ) where
+    ) -> usize
+    where
         C: ComponentType,
         V: ValueType,
     {
         let n_knn = cmp::min(self.dim, in_n_knn);
 
         let neighbours: Vec<_> = heap.clone().into_sorted_vec();
+        let mut documents_processed = 0;
 
         for ScoredItem {
             score: _distance,
@@ -1146,15 +1439,97 @@ impl Knn {
                         v_values,
                     );
                     heap.push(ScoredItem::new(offset, distance));
+                    documents_processed += 1;
                 }
             }
         }
+
+        documents_processed
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_query_statistics() {
+        let mut dataset = SparseDatasetMut::<u16, f32>::default();
+        
+        // Add some test vectors
+        dataset.push(&[0, 2, 4], &[1.0, 2.0, 3.0]);
+        dataset.push(&[1, 3, 5], &[1.5, 2.5, 3.5]);
+        dataset.push(&[0, 1, 2], &[2.0, 1.0, 1.5]);
+        
+        let dataset = SparseDataset::<u16, f32>::from(dataset);
+        let index = InvertedIndex::build(dataset, Configuration::default());
+        
+        // Test search with stats
+        let (results, stats) = index.search_with_stats(
+            &[0, 1, 2], 
+            &[1.0, 1.0, 1.0], 
+            10, 
+            5, 
+            0.7, 
+            0, 
+            false
+        );
+        
+        // Verify we got some results
+        assert!(!results.is_empty());
+        
+        // Verify statistics are populated
+        assert!(stats.summary_dot_products > 0);
+        assert!(stats.document_dot_products > 0);
+        assert!(stats.clusters_examined > 0);
+        
+        println!("Test query stats: {:?}", stats);
+    }
+
+    #[test]
+    fn test_aggregated_statistics() {
+        let mut dataset = SparseDatasetMut::<u16, f32>::default();
+        
+        // Add some test vectors
+        dataset.push(&[0, 2, 4], &[1.0, 2.0, 3.0]);
+        dataset.push(&[1, 3, 5], &[1.5, 2.5, 3.5]);
+        dataset.push(&[0, 1, 2], &[2.0, 1.0, 1.5]);
+        dataset.push(&[2, 3, 4], &[1.0, 1.5, 2.0]);
+        
+        let dataset = SparseDataset::<u16, f32>::from(dataset);
+        let index = InvertedIndex::build(dataset, Configuration::default());
+        
+        let mut aggregated_stats = AggregatedStatistics::default();
+        
+        // Run multiple queries
+        let queries = vec![
+            (&[0, 1, 2][..], &[1.0, 1.0, 1.0][..]),
+            (&[1, 3, 5][..], &[1.5, 2.5, 3.5][..]),
+            (&[0, 2, 4][..], &[1.0, 2.0, 3.0][..]),
+        ];
+        
+        for (query_components, query_values) in queries {
+            let (_results, stats) = index.search_with_stats(
+                query_components, 
+                query_values, 
+                10, 
+                5, 
+                0.7, 
+                0, 
+                false
+            );
+            aggregated_stats.add_query_stats(&stats);
+        }
+        
+        // Verify aggregated statistics
+        assert_eq!(aggregated_stats.total_queries, 3);
+        assert!(aggregated_stats.total_summary_dot_products > 0);
+        assert!(aggregated_stats.total_document_dot_products > 0);
+        assert!(aggregated_stats.total_clusters_examined > 0);
+        
+        // Print the aggregated statistics
+        aggregated_stats.print_averaged_statistics();
+    }
 
     // Test pushing empty vectors.
     #[test]

@@ -313,6 +313,14 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
     
     if "first-sorted" in query_config:
         command_and_params.append("--first-sorted")
+    
+    # Enable timing statistics if specified in settings
+    if configs['settings'].get('timing-stats', True):  # Default to True to show timing stats
+        command_and_params.append("--timing-stats")
+    
+    # Enable verbose per-query statistics if specified in settings
+    if configs['settings'].get('verbose-stats', False):  # Default to False for verbose stats
+        command_and_params.append("--verbose-stats")
 
     if configs['indexing_parameters'].get("component-type", None):
         component_type = configs['indexing_parameters']["component-type"]

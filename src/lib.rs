@@ -18,7 +18,7 @@ pub use sparse_dataset::SparseDataset;
 pub use sparse_dataset::SparseDatasetMut;
 
 pub mod inverted_index;
-pub use inverted_index::InvertedIndex;
+pub use inverted_index::{InvertedIndex, QueryStatistics, AggregatedStatistics};
 
 pub mod inverted_index_wrapper;
 pub use inverted_index_wrapper::SeismicDataset;

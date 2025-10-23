@@ -63,6 +63,16 @@ struct Args {
     #[arg(default_value_t = false)]
     first_sorted: bool,
 
+    /// Print per-query statistics for debugging
+    #[clap(long, action)]
+    #[arg(default_value_t = false)]
+    verbose_stats: bool,
+
+    /// Print detailed timing breakdown for query phases
+    #[clap(long, action)]
+    #[arg(default_value_t = false)]
+    timing_stats: bool,
+
     #[clap(long, value_parser)]
     query_energy: Option<f32>,
 
@@ -109,13 +119,14 @@ where
     );
 
     let mut results = Vec::with_capacity(n_queries);
+    let mut aggregated_stats = seismic::AggregatedStatistics::default();
 
     let time = Instant::now();
-    for _ in 0..n_runs {
+    for run_idx in 0..n_runs {
         results.clear();
 
         for (query_id, (q_components, q_values)) in queries.iter().take(n_queries).enumerate() {
-            let cur_results = inverted_index.search(
+            let (cur_results, query_stats) = inverted_index.search_with_stats(
                 q_components,
                 q_values,
                 args.k,
@@ -124,6 +135,14 @@ where
                 nknn,
                 args.first_sorted,
             );
+
+            // Only collect stats from the last run to avoid skewing averages
+            if run_idx == n_runs - 1 {
+                aggregated_stats.add_query_stats(&query_stats);
+                if args.verbose_stats {
+                    query_stats.print_query_stats(query_id);
+                }
+            }
 
             if cur_results.len() < args.k {
                 println!(
@@ -141,6 +160,30 @@ where
         elapsed.as_micros() / (n_runs * n_queries) as u128
     );
     //eprintln!("{}", elapsed.as_micros() / (n_runs * n_queries) as u128);
+
+    // Print aggregated query statistics
+    if args.timing_stats {
+        aggregated_stats.print_averaged_statistics();
+    } else {
+        // Print basic statistics without timing breakdown
+        if aggregated_stats.total_queries > 0 {
+            println!("\n=== Query Statistics ===");
+            println!("Total queries processed: {}", aggregated_stats.total_queries);
+            println!(
+                "Average summary dot products per query: {:.2}",
+                aggregated_stats.total_summary_dot_products as f64 / aggregated_stats.total_queries as f64
+            );
+            println!(
+                "Average document dot products per query: {:.2}",
+                aggregated_stats.total_document_dot_products as f64 / aggregated_stats.total_queries as f64
+            );
+            println!(
+                "Average clusters examined per query: {:.2}",
+                aggregated_stats.total_clusters_examined as f64 / aggregated_stats.total_queries as f64
+            );
+            println!("========================\n");
+        }
+    }
 
     inverted_index.print_space_usage_byte();
     // Writes results to a file in a parsable format
