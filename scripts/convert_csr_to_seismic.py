@@ -59,6 +59,24 @@ def convert_groundtruth_format(input_file, output_file):
                     # Skip invalid entries
                     continue
 
+def convert_qrels_format(input_file, output_file):
+    """Convert qrels format to add the 'useless' column with zero values"""
+    print(f"Converting qrels format from {input_file} to {output_file}")
+    
+    with open(input_file, 'r') as f_in, open(output_file, 'w') as f_out:
+        for line in f_in:
+            line = line.strip()
+            if line:
+                # Split the current format: query_id \t doc_id \t relevance_score
+                parts = line.split('\t')
+                if len(parts) == 3:
+                    query_id, doc_id, relevance_score = parts
+                    # Write in expected format: query_id \t 0 \t doc_id \t relevance_score
+                    f_out.write(f"{query_id}\t0\t{doc_id}\t{relevance_score}\n")
+                else:
+                    # If format is unexpected, just copy the line as-is
+                    f_out.write(line + "\n")
+
 def convert_csr_to_seismic_format(csr_file, output_dir, file_type="documents"):
     """Convert CSR matrix to Seismic binary format"""
     
@@ -138,11 +156,10 @@ def main():
                     convert_groundtruth_format(src, os.path.join(data_dir, "groundtruth.tsv"))
                     print(f"Converted {src} to groundtruth.tsv")
             elif filename.endswith('.tsv'):
-                # Copy qrels file
-                import shutil
+                # Convert qrels file to add the "useless" column with zero values
                 dst = os.path.join(output_dir, "qrels.nq.tsv")
-                shutil.copy(src, dst)
-                print(f"Copied {src} to {dst}")
+                convert_qrels_format(src, dst)
+                print(f"Converted {src} to {dst} (added useless column)")
     
     print(f"Conversion complete! Files saved to {data_dir}")
 
