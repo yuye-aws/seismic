@@ -393,6 +393,23 @@ def get_machine_info(configs, experiment_folder):
     machine_info.close()
     return
 
+def remove_index_files(configs):
+    """Remove index files if delete parameter is set to true."""
+    if not configs['settings'].get('delete', False):
+        return
+
+    index_folder = configs["folder"]["index"]
+    index_filename = get_index_filename(configs["filename"]["index"], configs)
+    index_file_path = os.path.join(index_folder, f"{index_filename}.index.seismic")
+
+    try:
+        if os.path.exists(index_file_path):
+            os.remove(index_file_path)
+            print(colored(f"Index file removed: {index_file_path}", "yellow"))
+        else:
+            print(colored(f"Index file not found (already removed?): {index_file_path}", "yellow"))
+    except Exception as e:
+        print(colored(f"Warning: Could not remove index file {index_file_path}: {e}", "red"))
 
 def run_experiment(config_data):
     """Run the seismic experiment based on the provided configuration."""
