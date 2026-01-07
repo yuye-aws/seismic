@@ -39,6 +39,26 @@ def write_sparse_vectors_to_binary_file(filename, vectors):
         for indices, values in tqdm(vectors, desc=f"Writing {os.path.basename(filename)}"):
             write_binary_sequence(indices, values, fout)
 
+def convert_groundtruth_format(input_file, output_file):
+    """Convert NQ groundtruth format (comma-separated) to TSV format expected by Seismic"""
+    print(f"Converting groundtruth format from {input_file} to {output_file}")
+    
+    with open(input_file, 'r') as f_in, open(output_file, 'w') as f_out:
+        for query_id, line in enumerate(f_in):
+            # Parse comma-separated document IDs
+            doc_ids = line.strip().split(',')
+            
+            # Convert to TSV format: query_id \t doc_id \t rank \t score
+            for rank, doc_id_str in enumerate(doc_ids):
+                try:
+                    # Convert scientific notation to integer
+                    doc_id = int(float(doc_id_str))
+                    # Write in TSV format: query_id, doc_id, rank (1-based), score (dummy)
+                    f_out.write(f"{query_id}\t{doc_id}\t{rank + 1}\t1.0\n")
+                except ValueError:
+                    # Skip invalid entries
+                    continue
+
 def convert_csr_to_seismic_format(csr_file, output_dir, file_type="documents"):
     """Convert CSR matrix to Seismic binary format"""
     
@@ -107,14 +127,16 @@ def main():
                     np.save(os.path.join(data_dir, "doc_ids.npy"), ids)
                     print(f"Converted {src} to doc_ids.npy")
                 elif 'query_ids' in filename:
-                    ids = np.loadtxt(src, dtype=str)  
-                    np.save(os.path.join(data_dir, "queries_ids.npy"), ids)
-                    print(f"Converted {src} to queries_ids.npy")
+                    # Convert query IDs to integers
+                    ids = np.loadtxt(src, dtype=str)
+                    # Convert string IDs to integers (0, 1, 2, ...)
+                    int_ids = np.array([int(id_str) for id_str in ids], dtype=np.int64)
+                    np.save(os.path.join(data_dir, "queries_ids.npy"), int_ids)
+                    print(f"Converted {src} to queries_ids.npy (as integers)")
                 elif 'ground_truth' in filename:
-                    # Copy ground truth as TSV
-                    import shutil
-                    shutil.copy(src, os.path.join(data_dir, "groundtruth.tsv"))
-                    print(f"Copied {src} to groundtruth.tsv")
+                    # Convert ground truth from comma-separated to TSV format
+                    convert_groundtruth_format(src, os.path.join(data_dir, "groundtruth.tsv"))
+                    print(f"Converted {src} to groundtruth.tsv")
             elif filename.endswith('.tsv'):
                 # Copy qrels file
                 import shutil
