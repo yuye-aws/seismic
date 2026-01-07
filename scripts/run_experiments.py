@@ -303,6 +303,8 @@ def query_execution(configs, query_config, experiment_dir, subsection_name):
 
 
 def get_machine_info(configs, experiment_folder):
+
+    return
     machine_info_file = os.path.join(experiment_folder, "machine.output")
     machine_info = open(machine_info_file, "w")
 
@@ -397,7 +399,7 @@ def run_experiment(config_data):
 
      # Get the experiment name from the configuration
     experiment_name = config_data.get("name")
-    print(f"Running experiment:", colored(experiment_name, "green"))
+    print(colored(f"Running experiment:", "blue"), experiment_name)
 
     for k, v in config_data["folder"].items():
         if v.startswith("~"):
@@ -431,8 +433,11 @@ def run_experiment(config_data):
         print("Index is already built!")
 
     metric = config_data['settings']['metric']
+
+    print()
+    print(colored(f"Evaluation", "green"))
     print(f"Evaluation runs with metric {metric}")
-    
+
     # Execute queries for each subsection under [query]
     with open(os.path.join(experiment_folder, "report.tsv"), 'w') as report_file:
         report_file.write(f"Subsection\tQuery Time (microsecs)\tRecall\t{metric}\tMemory Usage (Bytes)\tBuilding Time (secs)\n")
@@ -440,6 +445,10 @@ def run_experiment(config_data):
             for subsection, query_config in config_data['query'].items():
                 query_time, recall, metric, memory_usage = query_execution(config_data, query_config, experiment_folder, subsection)
                 report_file.write(f"{subsection}\t{query_time}\t{recall}\t{metric}\t{memory_usage}\t{building_time}\n")
+
+    # Remove index files if delete parameter is set to true
+    remove_index_files(config_data)
+
 
 def main(experiment_config_filename):
     config_data = parse_toml(experiment_config_filename)
