@@ -9,8 +9,7 @@ use std::fs;
 use clap::Parser;
 use std::time::Instant;
 
-// TODO:
-// - add control to the Rayon's number of threads
+// Thread control for Rayon is now implemented via --num-threads parameter
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -85,10 +84,26 @@ struct Args {
     /// Number of documents per chunk in the batched indexing mode.
     #[clap(short, long, value_parser)]
     batched_indexing: Option<usize>,
+
+    /// Number of threads to use for parallel processing (default: 0 = use all available cores)
+    #[clap(long, value_parser)]
+    #[arg(default_value_t = 0)]
+    num_threads: usize,
 }
 
 pub fn main() {
     let args = Args::parse();
+
+    // Configure Rayon thread pool
+    if args.num_threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.num_threads)
+            .build_global()
+            .unwrap();
+        println!("Using {} threads for parallel processing", args.num_threads);
+    } else {
+        println!("Using default number of threads (all available cores)");
+    }
 
     let dataset = SparseDataset::<f32>::read_bin_file(&args.input_file.unwrap())
         .unwrap()

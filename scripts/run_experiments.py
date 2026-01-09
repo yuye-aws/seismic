@@ -140,6 +140,11 @@ def build_index(configs, experiment_dir):
         alpha = configs['indexing_parameters']["alpha"]
         command_and_params.append(f"--alpha {alpha}")
 
+    # Add thread control support
+    if configs['indexing_parameters'].get("num-threads", None):
+        num_threads = configs['indexing_parameters']["num-threads"]
+        command_and_params.append(f"--num-threads {num_threads}")
+
     pruning_strategy = configs['indexing_parameters'].get("pruning-strategy", "global-threshold")
     command_and_params.append(f"--pruning-strategy {pruning_strategy}")
 
