@@ -50,7 +50,7 @@ def extract_doc_ids_from_qrels(qrels_file):
     # Extract unique document IDs
     unique_doc_ids = df['doc_id'].unique()
     
-    # Create mapping from doc_id string to integer index
+    # Create mapping from doc_id to integer index
     doc_id_to_idx = {doc_id: idx for idx, doc_id in enumerate(unique_doc_ids)}
     
     print(f"Found {len(unique_doc_ids)} unique document IDs")
@@ -68,29 +68,122 @@ def convert_qrels_format_v2(input_file, output_file, doc_id_to_idx):
             doc_id_str = row['doc_id']
             relevance = row['relevance']
             
-            # Convert doc_id string to integer index
-            doc_id_idx = doc_id_to_idx[doc_id_str]
-            
-            # Write in expected format: query_id \t 0 \t doc_id_idx \t relevance
-            f_out.write(f"{query_id}\t0\t{doc_id_idx}\t{relevance}\n")
+            # Extract numeric ID from msmarco_passage_XX_YYYYYYY format
+            if isinstance(doc_id_str, str) and doc_id_str.startswith('msmarco_passage_'):
+                parts = doc_id_str.split('_')
+                if len(parts) >= 4:
+                    try:
+                        numeric_doc_id = int(parts[-1])
+                        if numeric_doc_id in doc_id_to_idx:
+                            doc_id_idx = doc_id_to_idx[numeric_doc_id]
+                            # Write in expected format: query_id \t 0 \t doc_id_idx \t relevance
+                            f_out.write(f"{query_id}\t0\t{doc_id_idx}\t{relevance}\n")
+                    except ValueError:
+                        continue
 
-def create_groundtruth_from_qrels(qrels_file, output_file, doc_id_to_idx):
-    """Create groundtruth.tsv from qrels file for MSMarco v2"""
-    print(f"Creating groundtruth file from {qrels_file}")
+def create_groundtruth_from_v2_file(groundtruth_file, output_file, doc_id_to_idx, query_ids_array):
+    """Create groundtruth.tsv from v2_ground_truth_int.txt file for MSMarco v2"""
+    print(f"Creating groundtruth file from {groundtruth_file}")
     
-    df = pd.read_csv(qrels_file, sep='\t')
+    groundtruth_entries = []
+    missing_docs = set()
     
-    # Group by query_id to get all relevant documents per query
-    grouped = df.groupby('query_id')
-    
-    with open(output_file, 'w') as f_out:
-        for query_id, group in grouped:
-            # Get all relevant doc IDs for this query
-            doc_ids = [doc_id_to_idx[doc_id] for doc_id in group['doc_id'].values]
+    with open(groundtruth_file, 'r') as f:
+        for query_idx, line in enumerate(tqdm(f, desc="Processing ground truth")):
+            line = line.strip()
+            if not line:
+                continue
             
-            # Write in TSV format: query_id \t doc_id \t rank \t score
-            for rank, doc_id in enumerate(doc_ids):
-                f_out.write(f"{query_id}\t{doc_id}\t{rank + 1}\t1.0\n")
+            # Parse comma-separated document IDs (each line has 10 docs for recall@10)
+            doc_ids_str = line.split(',')
+            
+            for rank, doc_id_str in enumerate(doc_ids_str, 1):
+                try:
+                    doc_id = int(doc_id_str.strip())
+                    
+                    if doc_id in doc_id_to_idx:
+                        doc_index = doc_id_to_idx[doc_id]
+                        groundtruth_entries.append([query_idx, doc_index, rank, 1.0])
+                    else:
+                        missing_docs.add(doc_id)
+                            
+                except ValueError:
+                    print(f"Warning: Invalid doc ID '{doc_id_str}' in query {query_idx}")
+                    continue
+    
+    print(f"Created {len(groundtruth_entries)} groundtruth entries")
+    print(f"Missing documents: {len(missing_docs)}")
+    
+    if missing_docs and len(missing_docs) < 20:
+        print(f"Missing doc IDs: {list(missing_docs)}")
+    
+    # Save groundtruth
+    if groundtruth_entries:
+        df = pd.DataFrame(groundtruth_entries, columns=['query_id', 'doc_id', 'rank', 'score'])
+        df.to_csv(output_file, sep='\t', header=False, index=False)
+        
+        print(f"Query index range: {df['query_id'].min()} to {df['query_id'].max()}")
+        print(f"Doc index range: {df['doc_id'].min()} to {df['doc_id'].max()}")
+        print(f"Saved groundtruth to: {output_file}")
+        
+        return True
+    else:
+        print("ERROR: No valid groundtruth entries created!")
+        return False
+
+def extract_doc_ids_from_groundtruth_and_qrels(qrels_file, groundtruth_file):
+    """Extract document IDs from both qrels and ground truth files"""
+    print(f"Extracting document IDs from {qrels_file} and {groundtruth_file}")
+    
+    # Get doc IDs from qrels
+    df_qrels = pd.read_csv(qrels_file, sep='\t')
+    qrels_doc_ids = set(df_qrels['doc_id'].unique())
+    print(f"Found {len(qrels_doc_ids)} unique document IDs in qrels")
+    
+    # Get doc IDs from ground truth
+    groundtruth_doc_ids = set()
+    with open(groundtruth_file, 'r') as f:
+        for line in tqdm(f, desc="Processing ground truth"):
+            line = line.strip()
+            if not line:
+                continue
+            doc_ids_str = line.split(',')
+            for doc_id_str in doc_ids_str:
+                try:
+                    doc_id = int(doc_id_str.strip())
+                    groundtruth_doc_ids.add(doc_id)
+                except ValueError:
+                    continue
+    
+    print(f"Found {len(groundtruth_doc_ids)} unique document IDs in ground truth")
+    
+    # Extract numeric IDs from qrels doc IDs (msmarco_passage_XX_YYYYYYY format)
+    qrels_numeric_ids = set()
+    for doc_id_str in qrels_doc_ids:
+        if isinstance(doc_id_str, str) and doc_id_str.startswith('msmarco_passage_'):
+            parts = doc_id_str.split('_')
+            if len(parts) >= 4:
+                try:
+                    numeric_id = int(parts[-1])  # Last part is the numeric ID
+                    qrels_numeric_ids.add(numeric_id)
+                except ValueError:
+                    continue
+    
+    print(f"Extracted {len(qrels_numeric_ids)} numeric IDs from qrels")
+    
+    # Find intersection and create comprehensive mapping
+    common_numeric_ids = groundtruth_doc_ids.intersection(qrels_numeric_ids)
+    print(f"Common numeric document IDs: {len(common_numeric_ids)}")
+    
+    # Use all numeric IDs from both sources
+    all_numeric_ids = qrels_numeric_ids.union(groundtruth_doc_ids)
+    sorted_doc_ids = sorted(all_numeric_ids)
+    
+    # Create mapping from numeric ID to index
+    doc_id_to_idx = {doc_id: idx for idx, doc_id in enumerate(sorted_doc_ids)}
+    
+    print(f"Created mapping for {len(all_numeric_ids)} total unique document IDs")
+    return sorted_doc_ids, doc_id_to_idx
 
 def convert_csr_to_seismic_format(csr_file, output_dir, file_type="documents"):
     """Convert CSR matrix to Seismic binary format"""
@@ -139,16 +232,27 @@ def main():
     data_dir = os.path.join(output_dir, "data")
     os.makedirs(data_dir, exist_ok=True)
     
-    # First, extract document IDs from qrels
+    # Check for required files
     qrels_file = os.path.join(input_dir, "qrels.tsv")
+    groundtruth_file = os.path.join(input_dir, "v2_ground_truth_int.txt")
+    
     if not os.path.exists(qrels_file):
         print(f"Error: {qrels_file} not found")
         return
     
-    unique_doc_ids, doc_id_to_idx = extract_doc_ids_from_qrels(qrels_file)
+    if not os.path.exists(groundtruth_file):
+        print(f"Error: {groundtruth_file} not found")
+        return
     
-    # Save doc_ids.npy
-    doc_ids_array = np.array(unique_doc_ids, dtype='<U50')  # Unicode string array
+    # Extract document IDs from both qrels and ground truth
+    unique_doc_ids, doc_id_to_idx = extract_doc_ids_from_groundtruth_and_qrels(qrels_file, groundtruth_file)
+    
+    # Save doc_ids.npy - use appropriate dtype based on doc ID type
+    if isinstance(unique_doc_ids[0], str):
+        doc_ids_array = np.array(unique_doc_ids, dtype='<U50')  # Unicode string array
+    else:
+        doc_ids_array = np.array(unique_doc_ids, dtype=np.int64)  # Integer array
+    
     np.save(os.path.join(data_dir, "doc_ids.npy"), doc_ids_array)
     print(f"Saved {len(doc_ids_array)} document IDs to doc_ids.npy")
     
@@ -170,6 +274,7 @@ def main():
     
     # Convert query IDs
     query_ids_file = os.path.join(input_dir, "query_ids.txt")
+    query_ids_array = None
     if os.path.exists(query_ids_file):
         print(f"Converting {query_ids_file} to queries_ids.npy")
         with open(query_ids_file, 'r') as f:
@@ -178,9 +283,23 @@ def main():
         query_ids_array = np.array([int(query_id) for query_id in query_ids], dtype=np.int64)
         np.save(os.path.join(data_dir, "queries_ids.npy"), query_ids_array)
         print(f"Saved {len(query_ids_array)} query IDs")
+    else:
+        print(f"Warning: {query_ids_file} not found")
     
-    # Create groundtruth from qrels
-    create_groundtruth_from_qrels(qrels_file, os.path.join(data_dir, "groundtruth.tsv"), doc_id_to_idx)
+    # Create groundtruth from v2_ground_truth_int.txt
+    if query_ids_array is not None:
+        success = create_groundtruth_from_v2_file(
+            groundtruth_file, 
+            os.path.join(data_dir, "groundtruth.tsv"), 
+            doc_id_to_idx,
+            query_ids_array
+        )
+        if not success:
+            print("Failed to create groundtruth file!")
+            return
+    else:
+        print("Cannot create groundtruth without query IDs")
+        return
     
     # Convert qrels file
     dst = os.path.join(output_dir, "qrels.msmarco_v2.tsv")
