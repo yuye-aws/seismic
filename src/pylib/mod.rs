@@ -5,8 +5,6 @@ use crate::inverted_index::{
 
 use crate::SeismicDataset as Dataset;
 use crate::SeismicIndex as Index;
-use half::f16;
-use half::slice::HalfFloatSliceExt;
 
 use indicatif::ParallelProgressIterator;
 use numpy::{PyArrayMethods, PyFixedUnicode, PyReadonlyArrayDyn};
@@ -35,7 +33,7 @@ pub fn get_seismic_string() -> &'static str {
 /// dataset using `build` or `build_from_dataset`. See these methods for further details.
 #[pyclass]
 pub struct SeismicIndex {
-    index: Index<f16>,
+    index: Index<f32>,
 }
 
 #[pymethods]
@@ -135,7 +133,7 @@ impl SeismicIndex {
     #[pyo3(text_signature = "(self, id)")]
     pub fn get(&self, id: usize) -> PyResult<(Vec<u16>, Vec<f32>)> {
         let entry = self.index.dataset().get(id);
-        Ok((entry.0.to_vec(), entry.1.to_f32_vec()))
+        Ok((entry.0.to_vec(), entry.1.to_vec()))
     }
 
     /// Get the number of non-zero components in a specific document vector.
@@ -185,7 +183,7 @@ impl SeismicIndex {
             ))
         })?;
 
-        let index = bincode::deserialize::<Index<f16>>(&serialized).map_err(|e| {
+        let index = bincode::deserialize::<Index<f32>>(&serialized).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                 "Failed to deserialize index from '{}': {}",
                 index_path, e
@@ -656,7 +654,7 @@ impl SeismicIndex {
 ///
 #[pyclass]
 pub struct SeismicIndexRaw {
-    inverted_index: InvertedIndex<f16>,
+    inverted_index: InvertedIndex<f32>,
 }
 
 #[pymethods]
@@ -772,7 +770,7 @@ impl SeismicIndexRaw {
     #[pyo3(text_signature = "(self, id)")]
     pub fn get(&self, id: usize) -> PyResult<(Vec<u16>, Vec<f32>)> {
         let entry = self.inverted_index.dataset().get(id);
-        Ok((entry.0.to_vec(), entry.1.to_f32_vec()))
+        Ok((entry.0.to_vec(), entry.1.to_vec()))
     }
 
     /// Get the number of non-zero components in a document vector.
@@ -823,7 +821,7 @@ impl SeismicIndexRaw {
         })?;
 
         let inverted_index =
-            bincode::deserialize::<InvertedIndex<f16>>(&serialized).map_err(|e| {
+            bincode::deserialize::<InvertedIndex<f32>>(&serialized).map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                     "Failed to deserialize index from '{}': {}",
                     index_path, e
@@ -994,8 +992,7 @@ impl SeismicIndexRaw {
         batched_indexing: Option<usize>,
     ) -> PyResult<SeismicIndexRaw> {
         let dataset = SparseDataset::<f32>::read_bin_file(input_file)
-            .unwrap()
-            .quantize_f16();
+            .unwrap();
 
         let knn_config = KnnConfiguration::new(nknn, knn_path);
 
@@ -1156,7 +1153,7 @@ impl SeismicIndexRaw {
 #[derive(Clone)]
 #[pyclass]
 pub struct SeismicDataset {
-    dataset: Dataset<f16>,
+    dataset: Dataset<f32>,
 }
 
 #[pymethods]

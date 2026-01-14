@@ -3,8 +3,6 @@ use seismic::inverted_index::{
     KnnConfiguration, PruningStrategy, SummarizationStrategy,
 };
 use seismic::SeismicIndex;
-
-use half::f16;
 use std::fs;
 
 use clap::Parser;
@@ -131,7 +129,7 @@ pub fn main() {
     //    let inverted_index = InvertedIndexWrapper::new(dataset, config, None, None);
     let collection_path = args.input_file.unwrap();
 
-    let index = SeismicIndex::<f16>::from_json(&collection_path, config, None);
+    let index = SeismicIndex::<f32>::from_json(&collection_path, config, None);
 
     let elapsed = time.elapsed();
     println!(
