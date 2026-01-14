@@ -15,9 +15,9 @@ build =         false  # Need to build the index or the index is already built?
 metric =        "RR@10"
 
 [folder] 
-data =          "/home/ec2-user/yuye/sparse_datasets/msmarco_v2_converted/data"
-index =         "/home/ec2-user/yuye/sparse_datasets/msmarco_v2_converted/indexes"
-qrels_path =    "/home/ec2-user/yuye/sparse_datasets/msmarco_v2_converted/qrels.msmarco_v2.tsv"
+data =          "/home/ec2-user/sparse_datasets/msmarco_v2_converted/data"
+index =         "/home/ec2-user/sparse_datasets/msmarco_v2_converted/indexes"
+qrels_path =    "/home/ec2-user/sparse_datasets/msmarco_v2/qrels.tsv"
 experiment =    "."     # stdout and stderr here of running the experiment is saved here. in a specific subfolder for the current execution
 
 [filename]
