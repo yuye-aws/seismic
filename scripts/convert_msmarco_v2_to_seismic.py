@@ -56,6 +56,14 @@ def extract_doc_ids_from_qrels(qrels_file):
     print(f"Found {len(unique_doc_ids)} unique document IDs")
     return unique_doc_ids, doc_id_to_idx
 
+
+def get_num_docs_from_csr(csr_file):
+    """Get the number of documents from a CSR file"""
+    with open(csr_file, "rb") as f:
+        sizes = np.fromfile(f, dtype="int64", count=3)
+        nrow, ncol, nnz = sizes
+        return nrow
+
 def convert_qrels_format_v2(input_file, output_file, doc_id_to_idx):
     """Convert MS MARCO v2 qrels format to seismic format with integer doc IDs"""
     print(f"Converting qrels format from {input_file} to {output_file}")
@@ -131,8 +139,90 @@ def create_groundtruth_from_v2_file(groundtruth_file, output_file, doc_id_to_idx
         print("ERROR: No valid groundtruth entries created!")
         return False
 
+
+def create_groundtruth_from_v2_file_direct(groundtruth_file, output_file, num_docs):
+    """
+    Create groundtruth.tsv from v2_ground_truth_int.txt file for MSMarco v2.
+    The doc IDs in groundtruth are already the CSR matrix indices, so no mapping needed.
+    """
+    print(f"Creating groundtruth file from {groundtruth_file}")
+    
+    groundtruth_entries = []
+    invalid_docs = []
+    
+    with open(groundtruth_file, 'r') as f:
+        for query_idx, line in enumerate(tqdm(f, desc="Processing ground truth")):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Parse comma-separated document IDs (each line has 10 docs for recall@10)
+            doc_ids_str = line.split(',')
+            
+            for rank, doc_id_str in enumerate(doc_ids_str, 1):
+                try:
+                    doc_id = int(doc_id_str.strip())
+                    
+                    # Validate doc_id is within corpus range
+                    if 0 <= doc_id < num_docs:
+                        # Doc ID is already the index, use directly
+                        groundtruth_entries.append([query_idx, doc_id, rank, 1.0])
+                    else:
+                        invalid_docs.append(doc_id)
+                            
+                except ValueError:
+                    print(f"Warning: Invalid doc ID '{doc_id_str}' in query {query_idx}")
+                    continue
+    
+    print(f"Created {len(groundtruth_entries)} groundtruth entries")
+    if invalid_docs:
+        print(f"Invalid documents (out of range): {len(invalid_docs)}")
+        if len(invalid_docs) < 20:
+            print(f"Invalid doc IDs: {invalid_docs}")
+    
+    # Save groundtruth
+    if groundtruth_entries:
+        df = pd.DataFrame(groundtruth_entries, columns=['query_id', 'doc_id', 'rank', 'score'])
+        df.to_csv(output_file, sep='\t', header=False, index=False)
+        
+        print(f"Query index range: {df['query_id'].min()} to {df['query_id'].max()}")
+        print(f"Doc index range: {df['doc_id'].min()} to {df['doc_id'].max()}")
+        print(f"Saved groundtruth to: {output_file}")
+        
+        return True
+    else:
+        print("ERROR: No valid groundtruth entries created!")
+        return False
+
+
+def convert_qrels_format_v2_direct(input_file, output_file):
+    """
+    Convert MS MARCO v2 qrels format to seismic format.
+    Extract the numeric doc ID from msmarco_passage_XX_YYYYYYY format.
+    """
+    print(f"Converting qrels format from {input_file} to {output_file}")
+    
+    df = pd.read_csv(input_file, sep='\t')
+    
+    with open(output_file, 'w') as f_out:
+        for _, row in df.iterrows():
+            query_id = row['query_id']
+            doc_id_str = row['doc_id']
+            relevance = row['relevance']
+            
+            # Extract numeric ID from msmarco_passage_XX_YYYYYYY format
+            if isinstance(doc_id_str, str) and doc_id_str.startswith('msmarco_passage_'):
+                parts = doc_id_str.split('_')
+                if len(parts) >= 4:
+                    try:
+                        numeric_doc_id = int(parts[-1])
+                        # Write in expected format: query_id \t 0 \t doc_id \t relevance
+                        f_out.write(f"{query_id}\t0\t{numeric_doc_id}\t{relevance}\n")
+                    except ValueError:
+                        continue
+
 def extract_doc_ids_from_groundtruth_and_qrels(qrels_file, groundtruth_file):
-    """Extract document IDs from both qrels and ground truth files"""
+    """Extract document IDs from both qrels and ground truth files for validation"""
     print(f"Extracting document IDs from {qrels_file} and {groundtruth_file}")
     
     # Get doc IDs from qrels
@@ -171,19 +261,20 @@ def extract_doc_ids_from_groundtruth_and_qrels(qrels_file, groundtruth_file):
     
     print(f"Extracted {len(qrels_numeric_ids)} numeric IDs from qrels")
     
-    # Find intersection and create comprehensive mapping
-    common_numeric_ids = groundtruth_doc_ids.intersection(qrels_numeric_ids)
-    print(f"Common numeric document IDs: {len(common_numeric_ids)}")
-    
-    # Use all numeric IDs from both sources
-    all_numeric_ids = qrels_numeric_ids.union(groundtruth_doc_ids)
-    sorted_doc_ids = sorted(all_numeric_ids)
-    
-    # Create mapping from numeric ID to index
-    doc_id_to_idx = {doc_id: idx for idx, doc_id in enumerate(sorted_doc_ids)}
-    
-    print(f"Created mapping for {len(all_numeric_ids)} total unique document IDs")
-    return sorted_doc_ids, doc_id_to_idx
+    return groundtruth_doc_ids, qrels_numeric_ids
+
+
+def create_doc_ids_from_corpus(num_docs):
+    """
+    Create doc_ids array for all documents in the corpus.
+    For MS MARCO v2, documents are indexed sequentially from 0 to num_docs-1.
+    The doc_ids array maps each index to itself (identity mapping).
+    """
+    print(f"Creating doc_ids array for {num_docs} documents")
+    # For MS MARCO v2, the document index in the CSR matrix IS the document ID
+    # The groundtruth file already uses these integer indices
+    doc_ids_array = np.arange(num_docs, dtype=np.int64)
+    return doc_ids_array
 
 def convert_csr_to_seismic_format(csr_file, output_dir, file_type="documents"):
     """Convert CSR matrix to Seismic binary format"""
@@ -235,6 +326,7 @@ def main():
     # Check for required files
     qrels_file = os.path.join(input_dir, "qrels.tsv")
     groundtruth_file = os.path.join(input_dir, "v2_ground_truth_int.txt")
+    docs_file = os.path.join(input_dir, "merged_passages.csr")
     
     if not os.path.exists(qrels_file):
         print(f"Error: {qrels_file} not found")
@@ -244,26 +336,32 @@ def main():
         print(f"Error: {groundtruth_file} not found")
         return
     
-    # Extract document IDs from both qrels and ground truth
-    unique_doc_ids, doc_id_to_idx = extract_doc_ids_from_groundtruth_and_qrels(qrels_file, groundtruth_file)
+    if not os.path.exists(docs_file):
+        print(f"Error: {docs_file} not found")
+        return
     
-    # Save doc_ids.npy - use appropriate dtype based on doc ID type
-    if isinstance(unique_doc_ids[0], str):
-        doc_ids_array = np.array(unique_doc_ids, dtype='<U50')  # Unicode string array
-    else:
-        doc_ids_array = np.array(unique_doc_ids, dtype=np.int64)  # Integer array
+    # Get the number of documents from the CSR file
+    num_docs = get_num_docs_from_csr(docs_file)
+    print(f"Total documents in corpus: {num_docs}")
     
+    # Create doc_ids array for ALL documents in the corpus
+    # For MS MARCO v2, document indices in CSR are the document IDs used in groundtruth
+    doc_ids_array = create_doc_ids_from_corpus(num_docs)
     np.save(os.path.join(data_dir, "doc_ids.npy"), doc_ids_array)
     print(f"Saved {len(doc_ids_array)} document IDs to doc_ids.npy")
     
-    # Convert documents using merged passages file
-    docs_file = os.path.join(input_dir, "merged_passages.csr")
-    if os.path.exists(docs_file):
-        print("Converting merged passages file...")
-        convert_csr_to_seismic_format(docs_file, data_dir, "documents")
+    # Validate against groundtruth and qrels
+    groundtruth_doc_ids, qrels_numeric_ids = extract_doc_ids_from_groundtruth_and_qrels(qrels_file, groundtruth_file)
+    max_gt_doc_id = max(groundtruth_doc_ids) if groundtruth_doc_ids else 0
+    print(f"Max document ID in groundtruth: {max_gt_doc_id}")
+    if max_gt_doc_id >= num_docs:
+        print(f"WARNING: Groundtruth contains doc IDs ({max_gt_doc_id}) >= num_docs ({num_docs})")
     else:
-        print(f"Error: {docs_file} not found")
-        return
+        print(f"Validation passed: all groundtruth doc IDs are within corpus range")
+    
+    # Convert documents
+    print("Converting merged passages file...")
+    convert_csr_to_seismic_format(docs_file, data_dir, "documents")
     
     # Convert queries  
     queries_file = os.path.join(input_dir, "queries.csr")
@@ -286,13 +384,12 @@ def main():
     else:
         print(f"Warning: {query_ids_file} not found")
     
-    # Create groundtruth from v2_ground_truth_int.txt
+    # Create groundtruth - for v2, doc IDs in groundtruth are already the CSR indices
     if query_ids_array is not None:
-        success = create_groundtruth_from_v2_file(
+        success = create_groundtruth_from_v2_file_direct(
             groundtruth_file, 
-            os.path.join(data_dir, "groundtruth.tsv"), 
-            doc_id_to_idx,
-            query_ids_array
+            os.path.join(data_dir, "groundtruth.tsv"),
+            num_docs
         )
         if not success:
             print("Failed to create groundtruth file!")
@@ -301,9 +398,9 @@ def main():
         print("Cannot create groundtruth without query IDs")
         return
     
-    # Convert qrels file
+    # Convert qrels file - need to map string doc IDs to integer indices
     dst = os.path.join(output_dir, "qrels.msmarco_v2.tsv")
-    convert_qrels_format_v2(qrels_file, dst, doc_id_to_idx)
+    convert_qrels_format_v2_direct(qrels_file, dst)
     print(f"Converted {qrels_file} to {dst}")
     
     print(f"Conversion complete! Files saved to {data_dir}")
