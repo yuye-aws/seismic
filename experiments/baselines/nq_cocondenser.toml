@@ -53,3 +53,7 @@ kmeans-pruning-factor = 0.005 # Only used by random-kmeans-inverted-index
     [query.recall_97]
     query-cut =         5
     heap-factor =       0.75
+
+    [query.recall_99]
+    query-cut =         60
+    heap-factor =       0.8
