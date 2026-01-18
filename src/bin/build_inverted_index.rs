@@ -106,8 +106,7 @@ pub fn main() {
     }
 
     let dataset = SparseDataset::<f32>::read_bin_file(&args.input_file.unwrap())
-        .unwrap()
-        .quantize_f16();
+        .unwrap();
 
     println!("Number of Vectors: {}", dataset.len());
     println!("Number of Dimensions: {}", dataset.dim());
