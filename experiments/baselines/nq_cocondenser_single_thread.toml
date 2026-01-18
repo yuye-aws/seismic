@@ -39,14 +39,18 @@ kmeans-pruning-factor = 0.005 # Only used by random-kmeans-inverted-index
 num-threads =           1     # Use single thread for benchmarking
 
 [query]
-    [query.recall_90]
-    query-cut =         5
-    heap-factor =       1.0
-
     [query.recall_91]
-    query-cut =         3
-    heap-factor =       0.9
+    query-cut =         4
+    heap-factor =       0.74
     
-    [query.recall_92]
+    [query.recall_93]
+    query-cut =         5
+    heap-factor =       0.71
+
+    [query.recall_95]
     query-cut =         7
-    heap-factor =       1.0
+    heap-factor =       0.68
+    
+    [query.recall_97]
+    query-cut =         9
+    heap-factor =       0.5
